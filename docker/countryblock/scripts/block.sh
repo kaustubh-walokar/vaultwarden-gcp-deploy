@@ -156,6 +156,7 @@ cleanup() {
 
 update() {
     local md5sum_file="/tmp/ipdeny-aggregated.MD5SUM"
+    local update_failed=0
 
     # This manifest check is only for transfer/integrity failures within ipdeny's feed.
     # It is not an independent security control because the manifest and zone files come
@@ -178,11 +179,13 @@ update() {
         expected_md5=$(awk -v zonefile_name="$zonefile_name" '$2 == zonefile_name { print $1; exit }' "$md5sum_file")
         if [[ -z "$expected_md5" ]]; then
             echo "Error: No checksum found for $zonefile_name in ipdeny manifest" >> $LOG
+            update_failed=1
             continue
         fi
 
         if ! curl -fsSL "$zonefile_remote" -o "$zonefile" -z "$zonefile"; then
             echo "Error: Failed to download $zonefile_remote" >> $LOG
+            update_failed=1
             continue
         fi
 
@@ -192,6 +195,7 @@ update() {
             echo "Error: MD5 checksum mismatch for $zonefile_name" >> $LOG
             echo "Expected: $expected_md5, got: $actual_md5" >> $LOG
             rm -f "$zonefile"
+            update_failed=1
             continue
         fi
 
@@ -203,17 +207,26 @@ update() {
             printf "Added %b subnets to %b ipset\n" "$(wc -l < "$zonefile")" "$country" >> $LOG
         else
             echo "Error: Zone file $zonefile not found" >> $LOG
+            update_failed=1
         fi
     done
 
     rm -f "$md5sum_file"
+    return $update_failed
 }
 
 if [ "$1" == "start" ]; then
     # Clean up old rules if they exist in case last run crashed
     cleanup
     setup || exit 1
-    update || exit 1
+    if ! update; then
+        # If update fails during startup the ipsets are empty, which means the DROP rule
+        # at the end of the countryblock chain blocks all traffic. Remove the rules so
+        # the container fails open (traffic passes) rather than silently blocking everything.
+        echo "Error: Failed to populate IP sets during startup, removing firewall rules to fail open" >> $LOG
+        cleanup
+        exit 1
+    fi
 
     # Sleep indefinitely waiting for SIGTERM
     printf "$0: waiting for SIGINT SIGTERM or SIGKILL to clean up\n" >> $LOG
