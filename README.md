@@ -216,7 +216,7 @@ The managed deployment always syncs backups to Google Cloud Storage with rclone.
 
 1. In your `.env`, set `BACKUP=rclone` and keep `BACKUP_RCLONE_CONF=/data/rclone/rclone.conf`.
 2. Set `BACKUP_RCLONE_DEST` to the bucket/path inside the configured remote (for example: `your-project-id-vaultwarden-backups/vaultwarden`). Do not include `gcs:` here.
-3. Terraform creates the bucket, and the startup script creates an rclone remote named `gcs` automatically using the VM service account, so the backup script prefixes the remote name for you.
+3. Terraform creates the bucket with uniform bucket-level access enabled, and the startup script creates an rclone remote named `gcs` automatically using the VM service account in bucket-policy-only mode, so the backup script prefixes the remote name for you.
 
 This materially improves recoverability compared with keeping backups only on the VM disk, but it is still not a fully independent offsite backup. The bucket lives in the same GCP project, the same GCP account, and the same cloud provider as the VM.
 

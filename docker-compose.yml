@@ -110,6 +110,7 @@ services:
     - BACKUP_EMAIL_NOTIFY
     - BACKUP_RCLONE_CONF
     - BACKUP_RCLONE_DEST
+    - RCLONE_GCS_BUCKET_POLICY_ONLY=true
     - SMTP_HOST
     - SMTP_FROM
     - SMTP_FROM_NAME=Vaultwarden Backup (${DOMAIN})
