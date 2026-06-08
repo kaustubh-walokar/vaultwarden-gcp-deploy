@@ -153,10 +153,10 @@ The VM automatically runs a startup script that:
 1. Uses Docker that ships with COS.
 2. Clones this repo into `/mnt/stateful_partition/vaultwarden-gcp-deploy`.
 3. Pulls secrets from Secret Manager into runtime files under `/mnt/stateful_partition/run/vaultwarden-gcp-deploy` and starts the stack from them using a pinned Docker CLI image to run `docker compose` against the COS Docker daemon.
-4. Builds the local images and starts the stack.
+4. Builds the local backup and countryblock images, then starts the stack.
 5. Schedules a reboot when COS updates require it.
 
-The bundled proxy image also delays Caddy startup until the configured hostname resolves to the VM's current external IPv4, so ACME does not race ahead of ddclient after first boot or an ephemeral-IP reboot.
+The proxy service bind-mounts a small startup wrapper that delays Caddy until the configured hostname resolves to the VM's current external IPv4, so ACME does not race ahead of ddclient after first boot or an ephemeral-IP reboot.
 
 The Terraform-managed VM also enables Container-Optimized OS Cloud Logging and serial port logging so Google Cloud Logging is the primary operator view for first boot and runtime troubleshooting. See [ADMINISTRATOR.md](ADMINISTRATOR.md) for the operator-focused logging notes.
 
