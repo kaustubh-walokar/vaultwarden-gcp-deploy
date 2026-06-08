@@ -4,6 +4,7 @@ locals {
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
     "iam.googleapis.com",
+    "logging.googleapis.com",
     "secretmanager.googleapis.com",
     "storage.googleapis.com",
   ])
@@ -100,6 +101,27 @@ resource "google_storage_bucket" "backup" {
   uniform_bucket_level_access = true
   versioning {
     enabled = true
+  }
+}
+
+resource "google_logging_saved_query" "container_debug" {
+  # Shared Logs Explorer query that hides noisy COS and serial-console logs.
+  name         = "${var.instance_name}-container-debug"
+  display_name = "${var.instance_name} container debug"
+  parent       = "projects/${var.project_id}"
+  location     = "global"
+  description  = "Exclude common COS and guest-agent logs to focus on Docker and container troubleshooting."
+  visibility   = "SHARED"
+  depends_on   = [google_project_service.required]
+
+  logging_query {
+    filter = <<-EOT
+      -logName="projects/${var.project_id}/logs/cos_system"
+      -logName="projects/${var.project_id}/logs/GCEGuestAgent"
+      -logName="projects/${var.project_id}/logs/cos_journal_warning"
+      -logName="projects/${var.project_id}/logs/serialconsole.googleapis.com%2Fserial_port_1_output"
+      -logName="projects/${var.project_id}/logs/serialconsole.googleapis.com%2Fserial_port_debug_output"
+    EOT
   }
 }
 

@@ -21,8 +21,16 @@ wait_for_dns() {
 
   elapsed=0
   while [ "$elapsed" -lt "$timeout" ]; do
-    resolved_ips="$(dig +short A "$domain" @1.1.1.1 2>/dev/null | tr '\n' ' ')"
+    resolved_ips="$(nslookup "$domain" 1.1.1.1 2>/dev/null |
+      awk '/^Address([[:space:]][0-9]+)?: / { print $NF }' |
+      tr '\n' ' ')"
     for candidate in $resolved_ips; do
+      case "$candidate" in
+        *:*)
+          continue
+          ;;
+      esac
+
       if [ "$candidate" = "$expected_ip" ]; then
         echo "proxy-start: DNS ready for $domain -> $expected_ip" >&2
         return 0

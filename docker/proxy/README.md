@@ -4,6 +4,6 @@ This is the proxy container repository for the [Vaultwarden on Google Cloud](htt
 
 ## Changes
 
-Base Image: `caddy:alpine`
+Base Image: `serfriz/caddy-ratelimit-dockerproxy-sablier:2.11.4`
 
-Changes to Base Image: Add tzdata package so timezone is set using `TZ` env variable, and build Caddy with the `github.com/mholt/caddy-ratelimit` module used by the bundled Caddyfile
+Changes to Base Image: Add `bind-tools` for `dig` in the startup gate, add `tzdata` so timezone is set using `TZ`, and keep the bundled `rate_limit` directive available by starting from a pinned prebuilt Caddy image that already includes `github.com/mholt/caddy-ratelimit`
