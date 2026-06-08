@@ -181,8 +181,10 @@ resource "google_compute_instance" "vaultwarden" {
     repo_url              = var.repo_url
     repo_ref              = var.repo_ref
     project_id            = var.project_id
+    backup_bucket_name    = local.backup_bucket_name
     env_secret_name       = var.env_secret_name
     ddclient_secret_name  = var.ddclient_secret_name
+    restore_backup_path   = var.restore_backup_path
     reboot_timezone       = var.reboot_timezone
     reboot_time           = var.reboot_time
   })

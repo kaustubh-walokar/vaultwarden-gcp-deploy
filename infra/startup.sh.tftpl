@@ -8,6 +8,7 @@ SECRETS_DIR="/mnt/stateful_partition/run/vaultwarden-gcp-deploy"
 ENV_FILE="$SECRETS_DIR/.env"
 DDCLIENT_CONF_FILE="$SECRETS_DIR/ddclient.conf"
 COMPOSE_ENV_FILE="$SECRETS_DIR/compose.env"
+RESTORE_STATE_DIR="$SECRETS_DIR/restore-state"
 COMPOSE_RUNNER_IMAGE="docker:27.4.1-cli"
 GCLOUD_IMAGE="google/cloud-sdk:slim"
 
@@ -70,6 +71,26 @@ fetch_secret() {
     sh -lc 'gcloud secrets versions access latest --secret="$SECRET_NAME" > "/secrets/$OUTPUT_NAME"'
 }
 
+fetch_gcs_object() {
+  local object_uri="$1"
+  local output_path="$2"
+  local output_dir
+  local output_name
+
+  output_dir="$(dirname "$output_path")"
+  output_name="$(basename "$output_path")"
+
+  mkdir -p "$output_dir"
+
+  docker run --rm \
+    -e CLOUDSDK_CORE_PROJECT="$PROJECT_ID" \
+    -e OBJECT_URI="$object_uri" \
+    -e OUTPUT_NAME="$output_name" \
+    -v "$output_dir:/restore" \
+    "$GCLOUD_IMAGE" \
+    sh -lc 'gcloud storage cp "$OBJECT_URI" "/restore/$OUTPUT_NAME"'
+}
+
 load_env_file() {
   local env_path="$1"
   local line
@@ -130,6 +151,62 @@ run_compose() {
     compose \
     --env-file "$COMPOSE_ENV_FILE" \
     "$@"
+}
+
+wait_for_container_running() {
+  local container_name="$1"
+
+  for _ in $(seq 1 60); do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || true)" = "true" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Container did not reach running state: $container_name" >&2
+  return 1
+}
+
+restore_from_backup() {
+  local configured_path="$${RESTORE_BACKUP_PATH#/}"
+  local restore_id
+  local stamp_file
+  local restore_dir
+  local restore_name
+  local host_restore_path
+  local container_restore_path
+  local object_uri
+
+  if [ -z "$configured_path" ]; then
+    return 0
+  fi
+
+  mkdir -p "$RESTORE_STATE_DIR"
+  chmod 700 "$RESTORE_STATE_DIR"
+
+  restore_id="$(printf '%s' "$configured_path" | cksum | awk '{print $1}')"
+  stamp_file="$RESTORE_STATE_DIR/$restore_id.done"
+
+  if [ -f "$stamp_file" ]; then
+    echo "Restore already applied for gs://$BACKUP_BUCKET_NAME/$configured_path; skipping." >&2
+    return 0
+  fi
+
+  restore_dir="$WORKDIR/vaultwarden/backups/restore-input"
+  restore_name="$(basename "$configured_path")"
+  host_restore_path="$restore_dir/$restore_name"
+  container_restore_path="/data/backups/restore-input/$restore_name"
+  object_uri="gs://$BACKUP_BUCKET_NAME/$configured_path"
+
+  echo "Downloading restore backup from $object_uri" >&2
+  fetch_gcs_object "$object_uri" "$host_restore_path"
+
+  wait_for_container_running backup
+
+  echo "Running restore from $container_restore_path" >&2
+  docker exec backup ash /backup.sh restore "$container_restore_path"
+
+  printf '%s\n' "$object_uri" > "$stamp_file"
 }
 
 bootstrap_stack() {
@@ -200,8 +277,10 @@ if [ -n "${repo_ref}" ]; then
 fi
 
 export PROJECT_ID="${project_id}"
+export BACKUP_BUCKET_NAME="${backup_bucket_name}"
 export ENV_SECRET="${env_secret_name}"
 export DDCLIENT_SECRET="${ddclient_secret_name}"
+export RESTORE_BACKUP_PATH="${restore_backup_path}"
 
 if [ -n "$ENV_SECRET" ]; then
   fetch_secret "$ENV_SECRET" "$ENV_FILE"
@@ -214,6 +293,7 @@ if [ -n "$DDCLIENT_SECRET" ]; then
 fi
 
 bootstrap_stack
+restore_from_backup
 
 # Schedule reboot when COS updates require it (runs in background).
 TZ="${reboot_timezone}" TIME="${reboot_time}" sh "$WORKDIR"/utilities/reboot-on-update.sh &

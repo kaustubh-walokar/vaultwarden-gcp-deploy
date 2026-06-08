@@ -96,6 +96,13 @@ variable "backup_bucket_name" {
   default     = ""
 }
 
+variable "restore_backup_path" {
+  # One-shot recovery input: object path inside the managed backup bucket.
+  description = "Optional GCS object path inside the managed backup bucket to restore on boot"
+  type        = string
+  default     = ""
+}
+
 variable "reboot_timezone" {
   # Timezone for scheduled reboot after COS updates.
   description = "Timezone for reboot scheduling"

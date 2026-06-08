@@ -104,6 +104,7 @@ Open [infra/terraform.tfvars](infra/terraform.tfvars) and make sure these values
 - `reboot_timezone` (timezone for scheduled reboots after COS updates)
 - `reboot_time` (local time for scheduled reboots after COS updates, HH:MM)
 - `backup_bucket_name` (optional override for the backup bucket; leave empty to use `project_id-instance_name-backups`)
+- `restore_backup_path` (optional object path inside the managed backup bucket to restore on boot; leave empty for normal operation)
 
 Example:
 ```tfvars
@@ -113,6 +114,7 @@ zone       = "us-central1-a"
 reboot_timezone = "Etc/UTC"
 reboot_time     = "06:00"
 backup_bucket_name   = "your-project-id-vaultwarden-backups"
+restore_backup_path  = ""
 ```
 
 If you are not sure, keep the defaults for region and zone above.
@@ -173,6 +175,26 @@ By default, Watchtower checks once per week using `WATCHTOWER_SCHEDULE`, enforce
 
 If an upstream image or update policy needs to change urgently, make the change in the repo or the generated env secret, apply Terraform, and let startup automation recreate the intended compose state. Do not assume shell access to the VM as part of routine remediation.
 
+### Restore from a GCS backup
+
+Restore is implemented as a boot-time recovery action, not as a shell-driven in-place admin task.
+
+Use this when you are recovering onto a replacement VM or intentionally reseeding the deployment from a known backup.
+
+1. Identify the backup object you want to restore from the managed backup bucket.
+2. Set `restore_backup_path` in [infra/terraform.tfvars](infra/terraform.tfvars) to the object path inside that bucket, for example `vaultwarden/vw_backup_2026-06-01-000000.tar.gz`.
+3. Run Terraform apply.
+4. On boot, the startup script downloads that object from `gs://<backup_bucket_name>/<restore_backup_path>`, starts the stack, and invokes the bundled restore command inside the backup container.
+5. Validate the site and logs after the VM finishes booting.
+6. Clear `restore_backup_path` back to `""` and apply again after recovery is complete.
+
+Notes:
+
+- If the backup archive is encrypted, the restore uses the current `BACKUP_ENCRYPTION_KEY` from the env secret.
+- A successful restore is only applied once per VM for a given object path, so an immediate reboot does not replay it on that same instance.
+- Clear `restore_backup_path` after recovery anyway. If you later replace the VM while the value is still set, the new VM will restore that backup again during first boot.
+- This is a full data restore for the mounted Vaultwarden data directory, not a selective import.
+
 ### First login checklist
 
 1. Wait 2–5 minutes after `apply` finishes.
@@ -230,6 +252,8 @@ The managed deployment always syncs backups to Google Cloud Storage with rclone.
 1. In your `.env`, set `BACKUP=rclone` and keep `BACKUP_RCLONE_CONF=/data/rclone/rclone.conf`.
 2. Set `BACKUP_RCLONE_DEST` to the bucket/path inside the configured remote (for example: `your-project-id-vaultwarden-backups/vaultwarden`). Do not include `gcs:` here.
 3. Terraform creates the bucket with uniform bucket-level access enabled, and the startup script creates an rclone remote named `gcs` automatically using the VM service account in bucket-policy-only mode, so the backup script prefixes the remote name for you.
+
+The same managed bucket is also the restore source for the Terraform-driven recovery flow described above.
 
 This materially improves recoverability compared with keeping backups only on the VM disk, but it is still not a fully independent offsite backup. The bucket lives in the same GCP project, the same GCP account, and the same cloud provider as the VM.
 
