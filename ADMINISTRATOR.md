@@ -4,6 +4,20 @@ This is an operator-focused stub for managing a running instance after deploymen
 
 It is intentionally incomplete for now.
 
+## Runtime operations
+
+The intended operating model for this deployment is non-interactive. Day-to-day changes and remediation should happen through repo-managed configuration, Terraform apply, and VM reboot or replacement rather than shell access into the instance.
+
+Watchtower remains enabled, but it is intentionally constrained:
+
+1. It checks for updates on the configured weekly schedule.
+2. It enforces a global `WATCHTOWER_COOLDOWN_DELAY=48h` before applying a detected image update.
+3. It only touches the explicit third-party containers listed in [docker-compose.yml](docker-compose.yml).
+
+The local `vwgc_backup:local` and `vwgc_countryblock:local` images are not Watchtower-managed. They change only when the repo-managed build inputs change and startup automation rebuilds them.
+
+If an upstream image or Watchtower policy needs to be corrected, update the repo or env secret, apply Terraform, and reboot if needed so the VM re-converges on the new desired state.
+
 ## Logging
 
 ### Primary operator view

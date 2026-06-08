@@ -160,6 +160,19 @@ The proxy service bind-mounts a small startup wrapper that delays Caddy until th
 
 The Terraform-managed VM also enables Container-Optimized OS Cloud Logging and serial port logging so Google Cloud Logging is the primary operator view for first boot and runtime troubleshooting. See [ADMINISTRATOR.md](ADMINISTRATOR.md) for the operator-focused logging notes.
 
+### Runtime updates and recovery
+
+The managed deployment is intentionally non-interactive. The normal operating model assumes you change repo-managed configuration, apply Terraform, and reboot or replace the VM when you need to converge on a new desired state.
+
+Runtime image updates are split into two categories:
+
+1. Third-party runtime containers are Watchtower-managed on a delayed cadence.
+2. Local repo images stay on `:local` tags and are updated only through repo changes and the bootstrapping flow.
+
+By default, Watchtower checks once per week using `WATCHTOWER_SCHEDULE`, enforces `WATCHTOWER_COOLDOWN_DELAY=48h`, and is scoped to the explicit third-party containers in [docker-compose.yml](docker-compose.yml). That keeps automatic updates in place while avoiding immediate uptake of freshly published images.
+
+If an upstream image or update policy needs to change urgently, make the change in the repo or the generated env secret, apply Terraform, and let startup automation recreate the intended compose state. Do not assume shell access to the VM as part of routine remediation.
+
 ### First login checklist
 
 1. Wait 2–5 minutes after `apply` finishes.
@@ -192,7 +205,7 @@ Do not wait for the container to create `ddns/ddclient.conf`. Create the `vwgc-d
 For the managed GCP flow, the VM keeps the fetched env and ddclient secrets in runtime files on the stateful partition instead of persisting them in the repo checkout. This allows Docker's reboot-time container restarts to see the last fetched config before the startup script refreshes those files from Secret Manager.
 
 ### Local builds for bundled images
-This repo builds the proxy, backup, and countryblock images locally from the Dockerfiles under [docker](docker) instead of pulling third-party images.
+This repo builds the backup and countryblock images locally from the Dockerfiles under [docker](docker). The proxy service stays on a third-party upstream image and binds in a repo-managed startup wrapper at runtime.
 
 ### One‑click GCP provisioning
 See the Quick start section above for a Terraform Cloud Shell deployment that provisions the VM and bootstraps the stack.

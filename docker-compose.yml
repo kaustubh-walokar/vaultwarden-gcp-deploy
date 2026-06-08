@@ -209,10 +209,18 @@ services:
     <<: *default-logging
     depends_on:
     - vaultwarden
+    command:
+    - ddns
+    - proxy
+    - vaultwarden
+    - fail2ban_msmtpd
+    - fail2ban
+    - watchtower
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock
     environment:
     - WATCHTOWER_CLEANUP=true
+    - WATCHTOWER_COOLDOWN_DELAY
     - WATCHTOWER_SCHEDULE
     - TZ
 

@@ -1,9 +1,9 @@
-# Vaultwarden on Google Cloud Docker Image - Caddy
+# Vaultwarden on Google Cloud Proxy Notes
 
-This is the proxy container repository for the [Vaultwarden on Google Cloud](https://github.com/samschurter/vaultwarden-gcp-deploy) project.
+This directory contains the repo-managed startup wrapper for the proxy service used by [Vaultwarden on Google Cloud](https://github.com/samschurter/vaultwarden-gcp-deploy).
 
 ## Changes
 
-Base Image: `serfriz/caddy-ratelimit-dockerproxy-sablier:2.11.4`
+Upstream Image: `serfriz/caddy-ratelimit-dockerproxy-sablier:2.11`
 
-Changes to Base Image: Add `bind-tools` for `dig` in the startup gate, add `tzdata` so timezone is set using `TZ`, and keep the bundled `rate_limit` directive available by starting from a pinned prebuilt Caddy image that already includes `github.com/mholt/caddy-ratelimit`
+Repo-managed runtime change: bind in `scripts/start-caddy.sh` so the upstream image waits for DNS to resolve the configured hostname to the VM before starting Caddy. This keeps the proxy on a third-party image while preserving the DNS startup gate needed by the managed deployment.
