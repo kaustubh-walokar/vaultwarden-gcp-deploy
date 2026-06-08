@@ -1,115 +1,103 @@
 # ADMINISTRATOR.md
 
-This is an operator-focused stub for managing a running instance after deployment.
+This guide covers normal administrative tasks for a running deployment.
 
-It is intentionally incomplete for now.
+The operating model is repo-managed and non-interactive: change configuration in this repo or in Secret Manager, apply Terraform, and let the VM re-converge on boot. Do not treat SSH access as part of the normal workflow.
 
-## Runtime operations
+## Keep the deployment current
 
-The intended operating model for this deployment is non-interactive. Day-to-day changes and remediation should happen through repo-managed configuration, Terraform apply, and VM reboot or replacement rather than shell access into the instance.
+There are multiple update paths:
 
-Watchtower remains enabled, but it is intentionally constrained:
+1. Third-party containers are updated by Watchtower on the configured schedule.
+2. The VM OS checks for updates and reboots daily if updates are available.
+3. Repo-built images and repo-managed configuration are updated when you change this repo and redeploy.
 
-1. It checks for updates on the configured weekly schedule.
-2. It enforces a global `WATCHTOWER_COOLDOWN_DELAY=48h` before applying a detected image update.
-3. It only touches the explicit third-party containers listed in [docker-compose.yml](docker-compose.yml).
+Watchtower only manages the named third-party containers in `docker-compose.yml`. It does not update the local `vwgc_backup:local` or `vwgc_countryblock:local` images.
 
-The local `vwgc_backup:local` and `vwgc_countryblock:local` images are not Watchtower-managed. They change only when the repo-managed build inputs change and startup automation rebuilds them.
+When you want to roll out repo changes:
 
-If an upstream image or Watchtower policy needs to be corrected, update the repo or env secret, apply Terraform, and reboot if needed so the VM re-converges on the new desired state.
+1. Pull the latest repo changes into your working copy.
+2. Review any changes to secrets or Terraform variables.
+3. Run `terraform apply` from `infra/`.
+4. Reboot or replace the VM if the change requires startup-time re-convergence.
 
-## Logging
+## Change application settings
 
-### Primary operator view
+Most runtime settings live in the `vwgc-env` secret created by `utilities/create-gcp-secrets.sh`.
 
-For the managed Google Compute Engine deployment, the intended single pane of glass is Google Cloud Logging.
+Use this when you need to change values such as:
 
-Terraform enables the Container-Optimized OS logging agent and serial port logging on the VM, so the first place to check during normal operations and bootstrap failures is Logs Explorer for the instance.
+1. Vaultwarden domain or SMTP settings.
+2. Signup policy.
+3. Backup schedule or destination.
+4. Country allowlist.
+5. Watchtower schedule.
 
-Practical entry points:
+Update flow:
+
+1. Run `bash utilities/create-gcp-secrets.sh`.
+2. Update the prompted values.
+3. Run `terraform apply`.
+
+For Terraform-controlled settings such as region, zone, reboot schedule, backup bucket, or restore path, edit `infra/terraform.tfvars` and then apply Terraform.
+
+## Check logs
+
+Google Cloud Logging is the primary operator view.
+
+Use either of these entry points:
 
 1. Google Cloud Console -> Compute Engine -> VM instances -> your instance -> Logs
-2. Google Cloud Console -> Logging -> Logs Explorer, filtered to the target VM instance
+2. Google Cloud Console -> Logging -> Logs Explorer, filtered to the VM
 
-### What should appear in Cloud Logging
+These logs should cover normal administration needs:
 
-When the VM is deployed from Terraform in this repo, Cloud Logging is expected to contain at least these categories:
+1. Container stdout and stderr for Vaultwarden, Caddy, ddclient, fail2ban, backup, countryblock, and Watchtower.
+2. COS system logs.
+3. Serial console output during boot.
 
-1. Container stdout and stderr from the Docker services on the VM, including:
-   - Vaultwarden container output
-   - Caddy access and error output
-   - ddclient output
-   - fail2ban container output
-   - backup job output
-   - countryblock output
-   - watchtower output
-2. Selected COS system logs collected by the built-in logging agent
-3. Serial console output for boot and startup-script troubleshooting
-4. Google Cloud control-plane logs such as audit logs for Compute Engine, Secret Manager access, and optional GCS backup activity
+Important local paths, if you ever need them for deeper inspection:
 
-### Important local log locations on the VM
+1. Vaultwarden file log: `/mnt/stateful_partition/vaultwarden-gcp-deploy/vaultwarden/vaultwarden.log`
+2. Docker container logs: `/var/lib/docker/containers/<container-id>/<container-id>-json.log`
 
-Cloud Logging is the preferred operator surface, but these are the underlying local paths and sources:
+## Manage backups
 
-1. Vaultwarden application log:
-   - `/mnt/stateful_partition/vaultwarden-gcp-deploy/vaultwarden/vaultwarden.log`
-   - Used by fail2ban for login and admin-path detection
-2. Docker container json logs for each container:
-   - `/var/lib/docker/containers/<container-id>/<container-id>-json.log`
-   - Backing store for `docker logs`
-3. Backup container internal log target:
-   - `/var/log/backup.log`
-   - Symlinked to container stdout, so it should also surface in Docker logs and Cloud Logging
-4. Countryblock container internal log target:
-   - `/var/log/block.log`
-   - Symlinked to container stdout, so it should also surface in Docker logs and Cloud Logging
-5. Host logs mounted into fail2ban:
-   - `/var/log`
-   - `/run/systemd/journal`
+The managed deployment stores backups in GCS by default.
 
-### Current logging behavior by destination
+Routine checks:
 
-1. Cloud Logging:
-   - Intended main operator destination on GCE
-   - Best for non-SSH troubleshooting and first-boot diagnosis
-2. Host local logs:
-   - COS system logs and Docker json logs remain on the VM filesystem
-   - Useful for deep inspection if there is ever a break-glass path
-3. Application-specific file logs:
-   - Vaultwarden writes a persistent file log under the mounted data directory
-4. Google Cloud audit logs:
-   - Separate from guest logs
-   - Useful for confirming secret access, instance actions, and storage access
+1. Confirm backup jobs are still appearing in Cloud Logging.
+2. Confirm recent backup objects exist in the configured GCS bucket.
+3. Confirm the current env secret still contains the expected backup destination and encryption settings.
 
-### What maps to Cloud Logging and what does not
+If you change the backup bucket name, update `infra/terraform.tfvars` and apply Terraform.
 
-The most important distinction is between container stdout and stderr, Docker's local json log files, and application logs written directly to files.
+If you change backup behavior such as schedule, retention, or notification settings, update the env secret and apply Terraform.
 
-1. Container stdout and stderr:
-   - This is the main stream Cloud Logging is expected to collect from the COS logging agent
-   - If a service writes a line to stdout or stderr, expect it to appear both in `docker logs` and in Cloud Logging during normal operation
-2. Docker json logs:
-   - These are Docker's local on-disk record of container stdout and stderr
-   - Path: `/var/lib/docker/containers/<container-id>/<container-id>-json.log`
-   - In normal operation, Cloud Logging should reflect the same underlying stdout and stderr events, but it is not a byte-for-byte archival guarantee
-3. File-only application logs:
-   - A log file written directly by an application is not automatically forwarded just because it exists on disk
-   - It appears in Cloud Logging only if something also emits that content to stdout or stderr, or if a separate log collector is configured to read the file
+## Restore from backup
 
-For this repo specifically:
+Restore is handled at boot, using `restore_backup_path` in Terraform.
 
-1. Caddy logs to stderr, so its runtime logs should appear in both Docker logs and Cloud Logging
-2. The backup container writes to `/var/log/backup.log`, but that path is symlinked to container stdout, so those entries should also appear in Docker logs and Cloud Logging
-3. The countryblock container writes to `/var/log/block.log`, but that path is symlinked to container stdout, so those entries should also appear in Docker logs and Cloud Logging
-4. Vaultwarden also writes a persistent file log at `/mnt/stateful_partition/vaultwarden-gcp-deploy/vaultwarden/vaultwarden.log`; that file exists for local persistence and fail2ban input, and should not be assumed to be the same thing as the container stdout stream
+Procedure:
 
-Operationally, treat Cloud Logging as the primary view for container output, but do not assume it is a perfect mirror of every local file-based log on the VM.
+1. Identify the object path in the managed backup bucket.
+2. Set `restore_backup_path` in `infra/terraform.tfvars` to that object path.
+3. Run `terraform apply`.
+4. Wait for the VM to boot and the restore to complete.
+5. Validate the site and logs.
+6. Clear `restore_backup_path` back to `""`.
+7. Run `terraform apply` again.
 
-### Gaps to document later
+The restore uses the current backup encryption key from the env secret when the archive is encrypted.
 
-Future revisions should add:
+## Reattach Terraform state in a new environment
 
-1. Recommended Logs Explorer queries
-2. Expected log names and resource filters
-3. Common failure signatures for first boot, DNS, TLS, and backup issues
-4. Escalation and recovery procedures when Cloud Logging is missing or incomplete
+If you need to administer the deployment from a new Cloud Shell session or another machine:
+
+1. Authenticate `gcloud` to the same project.
+2. Run `bash utilities/create-gcp-secrets.sh --prepare-terraform`.
+3. Change into `infra/`.
+4. Run `terraform init -reconfigure -backend-config=backend.hcl`.
+
+That recreates the local backend config and reconnects Terraform to the existing remote state.

@@ -1,271 +1,169 @@
 # Vaultwarden on Google Cloud
 
----
+This repo deploys a single Vaultwarden instance on Google Cloud with Terraform, Secret Manager, Container-Optimized OS, automatic HTTPS, Cloudflare-backed DDNS, fail2ban, country-based ingress filtering, and GCS backups.
 
-An opinionated, secure-by-default, easy-to-deploy Vaultwarden stack for GCP's free e2-micro tier.
+It is designed for a first deployment, not a hand-built VM. The normal workflow is:
 
-This repository packages Vaultwarden with automatic HTTPS, Cloudflare-managed DNS updates, required GCS backups, and a hardened deployment baseline built around Terraform, Secret Manager, and Container-Optimized OS.
+1. Create secrets.
+2. Review Terraform variables.
+3. Apply Terraform.
+4. Wait for first boot.
+5. Finish onboarding in Vaultwarden.
 
-You will need a registered domain name.
-
-## Why this repo
-
-- Opinionated defaults that favor a small, understandable deployment surface.
-- Secure-by-default infrastructure and runtime choices, including managed secrets, HTTPS termination, and defensive network controls.
-- A deployment flow designed for Cloud Shell so you can provision and bootstrap Vaultwarden with minimal local setup.
-
-## Quick start (Terraform in Cloud Shell)
-
-This workflow provisions an e2‑micro VM (Container‑Optimized OS), firewall rules, a service account, and Secret Manager secrets. The VM bootstraps the repo and starts the stack automatically.
-
-### Prerequisites
+You will need:
 
 1. A GCP project with billing enabled.
 2. Cloud Shell access in that project.
-3. A domain already managed in Cloudflare DNS.
-4. An app password for a Google Workspace account to use as the SMTP sender.
+3. A domain managed in Cloudflare DNS.
+4. A mailbox you can use for Vaultwarden SMTP.
 
-This deployment path assumes the repo's default operating model: Terraform provisions the VM and supporting resources, the instance pulls secrets from Secret Manager on boot, and the stack comes up with the bundled security controls enabled.
+## Why this is secure
 
-For this deployment, Cloudflare is used as the DNS provider and ddclient manages a single hostname such as `vw.example.com` after the VM is created.
+- Secrets are stored in Google Secret Manager and fetched on boot instead of being stored on a local disk.
+- The VM runs Container-Optimized OS and is recreated from Terraform-managed configuration.
+- Caddy handles HTTPS automatically.
+- Fail2ban blocks repeated login abuse.
+- Country blocking reduces unsolicited public traffic on `80/443`.
+- Backups are pushed to GCS instead of living only on the VM disk.
+- Public signups are disabled by default.
+- SSH access is blocked by default, and the operating model does not assume routine SSH access for administration.
 
-- Add your domain to Cloudflare DNS at the domain level, for example `example.com`, not the Vaultwarden hostname.
-- If you bought the domain through Cloudflare Registrar and it already appears in your Cloudflare dashboard, you do not need to add it again.
-- Choose the Vaultwarden hostname you want to use under that domain, for example `vw.example.com`.
-- If first-boot DDNS does not create the hostname successfully, create a DNS-only `A` record for the Vaultwarden hostname that points at the VM external IPv4 address, then let ddclient maintain it afterward.
-- When the hostname appears in Cloudflare, keep it in DNS-only mode. Do not enable the Cloudflare proxy for this setup.
+## 1. Clone the repo in Cloud Shell
 
-Terraform and gcloud are preinstalled and authenticated in Cloud Shell, so no local setup is required.
+Open Cloud Shell in the target GCP project and run:
 
-### 1) Clone the repo in Cloud Shell
+```bash
+git clone https://github.com/samschurter/vaultwarden-gcp-deploy.git
+cd vaultwarden-gcp-deploy
+```
 
-Open Cloud Shell in the GCP Console, then run:
+## 2. Create the required secrets
 
-1. `git clone https://github.com/samschurter/vaultwarden-gcp-deploy.git`
-2. `cd vaultwarden-gcp-deploy`
-
-### 2) Create secrets
-
-Run the interactive helper from Cloud Shell:
+Run:
 
 ```bash
 bash utilities/create-gcp-secrets.sh
 ```
 
-Before prompting for secrets, the helper also enables the Google Cloud APIs this deployment needs in a new project: Cloud Resource Manager, IAM, Compute Engine, Secret Manager, and Cloud Storage.
+This helper does the first-run setup work for you:
 
-You must already be logged in to the `gcloud` CLI and have permission to create or update Secret Manager secrets in the target project.
+1. Enables the required Google Cloud APIs.
+2. Creates or updates the `vwgc-env` and `vwgc-ddclient` secrets.
+3. Writes `infra/terraform.tfvars` with your project ID and backup bucket settings.
+4. Writes `infra/backend.hcl` so Terraform state lives in GCS.
 
-The script uses the active Cloud Shell project automatically. It does not ask for a project ID.
+Have these values ready when prompted:
 
-The script creates or updates the two secrets Terraform expects by default:
+1. Your Vaultwarden hostname, for example `vw.example.com`.
+2. Your Cloudflare zone, for example `example.com`.
+3. Your Cloudflare API token.
+4. Your Let's Encrypt e-mail address.
+5. Your timezone.
+6. Your SMTP sender address and password.
 
-1. `vwgc-env`
-2. `vwgc-ddclient`
+Use Cloudflare in DNS-only mode for the Vaultwarden hostname. Do not enable the Cloudflare proxy.
 
-It prompts for the values that beginners usually need to change, including:
+The script prints a bootstrap `ADMIN_TOKEN`. Save it before you continue.
 
-1. Your Vaultwarden hostname such as `vw.example.com`
-2. Your Cloudflare zone such as `example.com`
-3. Your Cloudflare API token
-4. Your Let's Encrypt email address
-5. Your timezone
-6. Your GCS backup destination
-7. Your SMTP settings (from address and app password)
+## 3. Review Terraform variables
 
-The generated secret contents are based on [`.env.template`](.env.template) and [`ddns/ddclient.conf.template`](ddns/ddclient.conf.template), but the script fills in the required values for the managed GCP deployment so you do not need to create those files manually.
+Open `infra/terraform.tfvars` and confirm the values you want to keep.
 
-The script always configures the deployment to sync backups to GCS. It also finds or creates [infra/terraform.tfvars](infra/terraform.tfvars) and seeds it with the active `project_id` and the matching `backup_bucket_name`.
+The main settings are:
 
-The same helper also prepares Terraform remote state for the Cloud Shell-first workflow. It creates or reuses a dedicated GCS bucket named `PROJECT_ID-vaultwarden-tfstate` by default and writes a local `infra/backend.hcl` file that points Terraform at that shared state bucket.
+- `project_id`
+    - Your GCP project ID, for example `my-gcp-project`.
+- `region`
+    - The region to deploy to, for example `us-west1`.
+- `zone`
+    - The zone to deploy to, for example `us-west1-a`.
+- `reboot_timezone`
+    - The timezone to use for automatic reboots when COS updates require one, for example `America/Chicago`.
+- `reboot_time`
+    - The time to schedule automatic reboots, in 24-hour `HH:MM` format, for example `03:00`.
+- `backup_bucket_name`
+    - The GCS bucket name to use for Vaultwarden backups, for example `vw-backups`. Leave blank to use the default `<project_id>-vaultwarden-backups`.
+- `restore_backup_path`
+    - If you are recovering from a backup, set this to the object path in the managed backup bucket, for example `vaultwarden/vw_backup_2026-06-08-000002.tar.gz`. Otherwise leave it blank.
 
-`backend.hcl` is kept separate from `terraform.tfvars` because Terraform initializes the backend before it loads input variables.
+If you are unsure, keep the default region and zone values already written by the repo.
 
-You do not need to know the VM IP yet. ddclient updates the hostname after Terraform creates the VM and the startup script finishes.
+## 4. Deploy
 
-The DNS flow for the managed deployment is:
+From the repo root, run:
 
-1. Put the parent domain under Cloudflare DNS.
-2. Run the secret helper and enter the hostname you want.
-3. Run `terraform apply`.
-4. Wait for first boot to finish and let ddclient create or update the hostname in Cloudflare.
-
-### 3) Create terraform.tfvars and backend config
-
-The helper script can create or update [infra/terraform.tfvars](infra/terraform.tfvars) for you. It always seeds `project_id` and `backup_bucket_name`.
-
-It also creates or updates a local `infra/backend.hcl` file for Terraform remote state. That file is not committed.
-
-Open [infra/terraform.tfvars](infra/terraform.tfvars) and make sure these values are set the way you want:
-
-- `project_id` (your GCP project ID)
-- `region` (keep the default unless you know you want a different free‑tier region)
-- `zone` (must be in the same region)
-- `reboot_timezone` (timezone for scheduled reboots after COS updates)
-- `reboot_time` (local time for scheduled reboots after COS updates, HH:MM)
-- `backup_bucket_name` (optional override for the backup bucket; leave empty to use `project_id-instance_name-backups`)
-- `restore_backup_path` (optional object path inside the managed backup bucket to restore on boot; leave empty for normal operation)
-
-Example:
-```tfvars
-project_id = "your-project-id"
-region     = "us-central1"
-zone       = "us-central1-a"
-reboot_timezone = "Etc/UTC"
-reboot_time     = "06:00"
-backup_bucket_name   = "your-project-id-vaultwarden-backups"
-restore_backup_path  = ""
+```bash
+cd infra
+terraform init -backend-config=backend.hcl
+terraform apply
 ```
 
-If you are not sure, keep the defaults for region and zone above.
+If you are attaching to an existing deployment from a new Cloud Shell session or a different machine, use:
 
-The generated backend config points Terraform at the shared GCS state bucket, so a new Cloud Shell session or a local machine can reattach to the same deployment state instead of starting from an empty local `terraform.tfstate`.
+```bash
+terraform init -reconfigure -backend-config=backend.hcl
+```
 
-### 4) Deploy
+## 5. Wait for first boot
 
-From the repo root in Cloud Shell, run these commands in order:
+After `terraform apply` completes, give the VM a few minutes to finish bootstrapping.
 
-1. `cd infra`
-2. `terraform init -backend-config=backend.hcl`
-3. `terraform apply`
+On first boot, the VM:
 
-Terraform also declares those required project APIs, so a direct `apply` in an already-authorized project can reconcile them if they were not enabled yet. The helper script is still the smoother first-run path because API enablement can take a short time to propagate.
+1. Clones this repo onto the stateful partition.
+2. Fetches the env and ddclient secrets from Secret Manager.
+3. Starts the compose stack.
+4. Builds the local backup and countryblock images.
+5. Schedules automatic reboots when COS updates require one.
 
-After apply completes, the output includes the VM’s external IP address.
+The proxy waits for the hostname to resolve to the VM before Caddy starts, which prevents early certificate requests before DDNS is in place.
 
-If you are re-running this from a different machine or a fresh Cloud Shell home directory, use `terraform init -reconfigure -backend-config=backend.hcl`.
+## 6. Confirm the site is live
 
-### Reattach Terraform state from a new environment
+Open `https://your-hostname`.
 
-If your original Cloud Shell home directory has expired or you want to switch from Cloud Shell to a local machine, do not run Terraform against a fresh local state file.
+The deployment is ready when:
 
-From the repo root in the new environment:
+1. The hostname exists in Cloudflare DNS.
+2. The hostname resolves to the VM external IP.
+3. The site loads over HTTPS without a certificate warning.
 
-1. Authenticate `gcloud` to the same project.
-2. Run `bash utilities/create-gcp-secrets.sh --prepare-terraform`.
-3. `cd infra`
-4. `terraform init -reconfigure -backend-config=backend.hcl`
+If it is not ready yet, check the VM logs in Google Cloud Console under Compute Engine -> VM instances -> your instance -> Logs.
 
-The `--prepare-terraform` mode recreates `infra/backend.hcl` locally if needed, seeds `project_id` into [infra/terraform.tfvars](infra/terraform.tfvars), and creates the remote state bucket if it does not already exist.
+## 7. Finish the initial Vaultwarden setup
 
-### What happens after deploy
+Use the bootstrap `ADMIN_TOKEN` from the secret helper to access the admin page at `https://your-hostname/admin` and finish onboarding.
 
-The VM automatically runs a startup script that:
+Recommended first-run checklist:
 
-1. Uses Docker that ships with COS.
-2. Clones this repo into `/mnt/stateful_partition/vaultwarden-gcp-deploy`.
-3. Pulls secrets from Secret Manager into runtime files under `/mnt/stateful_partition/run/vaultwarden-gcp-deploy` and starts the stack from them using a pinned Docker CLI image to run `docker compose` against the COS Docker daemon.
-4. Builds the local backup and countryblock images, then starts the stack.
-5. Schedules a reboot when COS updates require it.
+1. Confirm SMTP works before allowing any signup flow.
+2. Keep `SIGNUPS_ALLOWED=false` unless you have a specific reason to open it.
+3. If you later allow signups, keep `SIGNUPS_VERIFY=true` and set `SIGNUPS_DOMAINS_WHITELIST`.
+4. Create your accounts and organization.
+5. Clear the bootstrap admin token when you are done:
 
-The proxy service bind-mounts a small startup wrapper that delays Caddy until the configured hostname resolves to the VM's current external IPv4, so ACME does not race ahead of ddclient after first boot or an ephemeral-IP reboot.
+```bash
+bash utilities/create-gcp-secrets.sh --clear-admin-token
+cd infra
+terraform apply
+```
 
-The Terraform-managed VM also enables Container-Optimized OS Cloud Logging and serial port logging so Google Cloud Logging is the primary operator view for first boot and runtime troubleshooting. See [ADMINISTRATOR.md](ADMINISTRATOR.md) for the operator-focused logging notes.
+At that point the admin page is disabled again.
 
-### Runtime updates and recovery
+## Backups and restore
 
-The managed deployment is intentionally non-interactive. The normal operating model assumes you change repo-managed configuration, apply Terraform, and reboot or replace the VM when you need to converge on a new desired state.
+Backups are configured for GCS by default.
 
-Runtime image updates are split into two categories:
+To restore from a backup:
 
-1. Third-party runtime containers are Watchtower-managed on a delayed cadence.
-2. Local repo images stay on `:local` tags and are updated only through repo changes and the bootstrapping flow.
+1. Find the object path you want to restore from the managed backup bucket.
+2. Set `restore_backup_path` in `infra/terraform.tfvars`.
+3. Run `terraform apply`.
+4. Wait for the VM to boot and complete the restore.
+5. Clear `restore_backup_path` back to `""` and apply again.
 
-By default, Watchtower checks once per week using `WATCHTOWER_SCHEDULE`, enforces `WATCHTOWER_COOLDOWN_DELAY=48h`, and is scoped to the explicit third-party containers in [docker-compose.yml](docker-compose.yml). That keeps automatic updates in place while avoiding immediate uptake of freshly published images.
+Restores are boot-time operations. This repo does not assume routine SSH access or manual in-place recovery steps.
 
-If an upstream image or update policy needs to change urgently, make the change in the repo or the generated env secret, apply Terraform, and let startup automation recreate the intended compose state. Do not assume shell access to the VM as part of routine remediation.
+## Day-two operations
 
-### Restore from a GCS backup
-
-Restore is implemented as a boot-time recovery action, not as a shell-driven in-place admin task.
-
-Use this when you are recovering onto a replacement VM or intentionally reseeding the deployment from a known backup.
-
-1. Identify the backup object you want to restore from the managed backup bucket.
-2. Set `restore_backup_path` in [infra/terraform.tfvars](infra/terraform.tfvars) to the object path inside that bucket, for example `vaultwarden/vw_backup_2026-06-01-000000.tar.gz`.
-3. Run Terraform apply.
-4. On boot, the startup script downloads that object from `gs://<backup_bucket_name>/<restore_backup_path>`, starts the stack, and invokes the bundled restore command inside the backup container.
-5. Validate the site and logs after the VM finishes booting.
-6. Clear `restore_backup_path` back to `""` and apply again after recovery is complete.
-
-Notes:
-
-- If the backup archive is encrypted, the restore uses the current `BACKUP_ENCRYPTION_KEY` from the env secret.
-- A successful restore is only applied once per VM for a given object path, so an immediate reboot does not replay it on that same instance.
-- Clear `restore_backup_path` after recovery anyway. If you later replace the VM while the value is still set, the new VM will restore that backup again during first boot.
-- This is a full data restore for the mounted Vaultwarden data directory, not a selective import.
-
-### First login checklist
-
-1. Wait 2–5 minutes after `apply` finishes.
-2. Open `https://<your-domain>` in a browser.
-3. The deployment is ready when the hostname record appears in Cloudflare DNS, resolves to the VM external IP, and the site loads over HTTPS without a certificate warning.
-4. If the page does not load yet, give DNS a little longer and then check the VM’s logs in the GCP Console → Compute Engine → your instance → Logs.
-
-### Post-deploy checklist
-
-Start with the default onboarding flow from [`.env.template`](.env.template): public signups are closed on first boot, a bootstrap admin token is generated into the env secret, and any later signup flow is restricted by e-mail verification plus `SIGNUPS_DOMAINS_WHITELIST`.
-
-1. Run [utilities/create-gcp-secrets.sh](utilities/create-gcp-secrets.sh) and save the generated bootstrap `ADMIN_TOKEN` shown in the summary. The script also prompts for SMTP settings — configure them now if possible.
-2. Deploy and confirm the site loads over HTTPS.
-3. Confirm SMTP is working before enabling any signup flow. `SIGNUPS_VERIFY=true` is enforced, so e-mail delivery must work before self-signup can succeed. For Google Workspace, the script pre-fills `smtp.gmail.com:587` (STARTTLS); you only need to supply your sending address and an app password. App passwords require 2-Step Verification on the sending account — generate one at https://myaccount.google.com/apppasswords.
-4. After onboarding, run `bash utilities/create-gcp-secrets.sh --clear-admin-token` and redeploy so the admin page is disabled.
-5. With SMTP configured and signups disabled, invite users from inside Vaultwarden instead of opening public signups.
-
-This checklist is intentionally incomplete for now and will grow as the deployment flow is tightened further.
-
-### Troubleshooting (minimal)
-
-- If the domain does not resolve, verify the hostname in your ddclient secret matches your chosen hostname and that Cloudflare DNS is set to DNS-only.
-- If HTTPS fails, ensure ports 80 and 443 are open (this is handled by Terraform).
-- If HTTPS fails immediately after a reboot or first boot, check whether the proxy logs are still waiting for DNS to move the hostname to the VM's current external IP before Caddy starts.
-- If ddclient is not updating, confirm the API token permissions, that the secret value matches your ddclient config, and that the Cloudflare zone in the secret is the parent zone such as `example.com` rather than the full hostname.
-- If the hostname is still missing after first boot, create a DNS-only `A` record for the hostname once, then rerun ddclient and confirm it can update the record.
-
-### Cloudflare DDNS (API token)
-Do not wait for the container to create `ddns/ddclient.conf`. Create the `vwgc-ddclient` Secret Manager secret before deployment, then let the VM write the file during first boot. Keep the hostname in DNS-only mode rather than proxied mode. If first-boot DDNS does not establish the hostname record, create the `A` record once in Cloudflare and let ddclient maintain it after that.
-For the managed GCP flow, the VM keeps the fetched env and ddclient secrets in runtime files on the stateful partition instead of persisting them in the repo checkout. This allows Docker's reboot-time container restarts to see the last fetched config before the startup script refreshes those files from Secret Manager.
-
-### Local builds for bundled images
-This repo builds the backup and countryblock images locally from the Dockerfiles under [docker](docker). The proxy service stays on a third-party upstream image and binds in a repo-managed startup wrapper at runtime.
-
-### One‑click GCP provisioning
-See the Quick start section above for a Terraform Cloud Shell deployment that provisions the VM and bootstraps the stack.
-
-## Stack overview
-
-### Features
-
-* Vaultwarden self-hosted on Google Cloud 'always free' e2-micro tier
-* Opinionated Terraform deployment with Cloud Shell-friendly bootstrap
-* Secure-by-default secret handling through GCP Secret Manager
-* Automatic HTTPS certificate management through Caddy 2 proxy
-* Dynamic DNS updates through ddclient
-* Blocking brute-force attempts with fail2ban
-* Country-wide blocking through iptables and ipset as a defense-in-depth ingress filter
-* Automatic GCS backups
-
-### Backups to GCS with rclone
-
-The managed deployment always syncs backups to Google Cloud Storage with rclone.
-
-1. In your `.env`, set `BACKUP=rclone` and keep `BACKUP_RCLONE_CONF=/data/rclone/rclone.conf`.
-2. Set `BACKUP_RCLONE_DEST` to the bucket/path inside the configured remote (for example: `your-project-id-vaultwarden-backups/vaultwarden`). Do not include `gcs:` here.
-3. Terraform creates the bucket with uniform bucket-level access enabled, and the startup script creates an rclone remote named `gcs` automatically using the VM service account in bucket-policy-only mode, so the backup script prefixes the remote name for you.
-
-The same managed bucket is also the restore source for the Terraform-driven recovery flow described above.
-
-This materially improves recoverability compared with keeping backups only on the VM disk, but it is still not a fully independent offsite backup. The bucket lives in the same GCP project, the same GCP account, and the same cloud provider as the VM.
-
-Treat the GCS bucket as the required durable backup target for this deployment, not as your final disaster-isolation layer. If you need protection against project compromise, account loss, or provider-wide failures, copy backups into a second administrative boundary as well.
-
-### Fail2ban status
-
-Fail2ban runs automatically with the bundled config in [fail2ban](fail2ban). No extra steps are required for basic protection.
-
-### Country blocking scope
-
-The country allowlist is an extra network-layer filter on public `80/443` ingress. It reduces exposure to unsolicited traffic, but it is not the primary security boundary for the deployment. Vaultwarden authentication, HTTPS, secret management, minimal service exposure, and host/container hardening remain the primary controls.
-
-The allowlist data is refreshed from ipdeny. The bundled updater checks ipdeny's published MD5 manifest to detect accidental corruption or incomplete downloads from that same feed. That check is for integrity within the feed, not an independent authenticity guarantee against a compromised upstream.
-
+Use [ADMINISTRATOR.md](ADMINISTRATOR.md) for routine administration: keeping the deployment current, updating settings, checking logs, and restoring backups.
