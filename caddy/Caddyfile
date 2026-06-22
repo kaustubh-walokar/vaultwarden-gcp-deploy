@@ -23,11 +23,22 @@
 
 	encode zstd gzip
 
-	# Apply a per-client limit across the whole site to cover all Vaultwarden endpoints.
+	# Apply separate per-client limits: a stricter one for the admin panel and a
+	# more generous one for the rest of the site. Zones are evaluated in order, so
+	# the admin zone must come first to catch /admin requests before the site zone.
 	rate_limit {
-		zone auth {
+		zone admin {
+			match {
+				path /admin*
+			}
 			key {remote_host}
-			events 45
+			events 60
+			window 1m
+			ipv6_prefix 64
+		}
+		zone site {
+			key {remote_host}
+			events 100
 			window 1m
 			ipv6_prefix 64
 		}
