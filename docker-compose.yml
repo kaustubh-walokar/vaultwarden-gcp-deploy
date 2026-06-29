@@ -60,6 +60,8 @@ services:
     - DOMAIN                            # Value-less variables are set in .env
     - EMAIL
     - TZ
+    - SSO_ENABLED                       # Controls the optional bare-root SSO redirect
+    - SSO_IDENTIFIER
 
   vaultwarden:
     # Standard Vaultwarden is very resource-heavy and cannot run on micro cloud instances
@@ -96,6 +98,13 @@ services:
     - YUBICO_SECRET_KEY
     - YUBICO_SERVER
     - ORG_CREATION_USERS
+    - SSO_ENABLED
+    - SSO_ONLY
+    - SSO_AUTH_ONLY_NOT_SESSION
+    - SSO_AUTHORITY
+    - SSO_AUTHORIZE_EXTRA_PARAMS
+    - SSO_CLIENT_ID
+    - SSO_CLIENT_SECRET
     - TZ
 
   backup:

@@ -515,6 +515,32 @@ require_non_empty 'SMTP from address' "$smtp_from"
 smtp_password="$(prompt_secret 'SMTP app password')"
 require_non_empty 'SMTP app password' "$smtp_password"
 
+# SSO / OpenID Connect (optional)
+sso_enabled='false'
+sso_only='false'
+sso_client_id=''
+sso_client_secret=''
+sso_identifier="$(template_env_setting 'SSO_IDENTIFIER')"
+sso_identifier="${sso_identifier:-sso}"
+sso_authority_default="$(template_env_setting 'SSO_AUTHORITY')"
+sso_authority="${sso_authority_default:-https://accounts.google.com}"
+
+printf '\nSingle Sign-On (SSO) is optional. When enabled, the proxy sends users straight\n'
+printf 'into the SSO flow and a master password is still required. Leave disabled for\n'
+printf 'normal password login.\n\n'
+if prompt_yes_no 'Enable SSO?' 'N'; then
+  sso_enabled='true'
+  sso_authority="$(prompt_value 'SSO authority (OpenID Connect issuer URL)' "$sso_authority")"
+  sso_client_id="$(prompt_value 'SSO client ID')"
+  require_non_empty 'SSO client ID' "$sso_client_id"
+  sso_client_secret="$(prompt_secret 'SSO client secret')"
+  require_non_empty 'SSO client secret' "$sso_client_secret"
+  sso_identifier="$(prompt_value 'SSO identifier (cosmetic, used in the login redirect)' "$sso_identifier")"
+  if prompt_yes_no 'Disable master-password login and require SSO only?' 'Y'; then
+    sso_only='true'
+  fi
+fi
+
 env_file="$TMP_DIR/.env"
 ddclient_file="$TMP_DIR/ddclient.conf"
 
@@ -534,6 +560,12 @@ upsert_env_setting "$env_file" "SIGNUPS_VERIFY" "true"
 upsert_env_setting "$env_file" "SIGNUPS_DOMAINS_WHITELIST" "$signup_domains_whitelist"
 upsert_env_setting "$env_file" "ADMIN_TOKEN" "$bootstrap_admin_token"
 upsert_env_setting "$env_file" "ORG_CREATION_USERS" ""
+upsert_env_setting "$env_file" "SSO_ENABLED" "$sso_enabled"
+upsert_env_setting "$env_file" "SSO_ONLY" "$sso_only"
+upsert_env_setting "$env_file" "SSO_AUTHORITY" "$sso_authority"
+upsert_env_setting "$env_file" "SSO_CLIENT_ID" "$sso_client_id"
+upsert_env_setting "$env_file" "SSO_CLIENT_SECRET" "$sso_client_secret"
+upsert_env_setting "$env_file" "SSO_IDENTIFIER" "$sso_identifier"
 upsert_env_setting "$env_file" "BACKUP" "rclone"
 upsert_env_setting "$env_file" "BACKUP_EMAIL_TO" "$smtp_from"
 upsert_env_setting "$env_file" "BACKUP_RCLONE_CONF" "/data/rclone/rclone.conf"
@@ -575,6 +607,7 @@ printf '  terraform.tfvars: %s\n' "$TFVARS_FILE"
 printf '  Terraform state bucket: %s\n' "${TFSTATE_BUCKET_NAME:-${project_id}-vaultwarden-tfstate}"
 printf '  Terraform backend config: %s\n' "$BACKEND_CONFIG_FILE"
 printf '  Signup domain whitelist: %s\n' "$signup_domains_whitelist"
+printf '  SSO enabled: %s\n' "$sso_enabled"
 printf '  Backup destination: %s\n' "$backup_rclone_dest"
 printf '  Terraform backup bucket: %s\n' "$backup_bucket_name"
 printf '  Bootstrap admin token: %s\n' "$bootstrap_admin_token"

@@ -67,6 +67,11 @@
 		-Last-Modified
 	}
 
+	# Optionally send users who hit the bare site straight into the SSO flow, since
+	# the web vault has no way to auto-show the Enterprise SSO button. The snippet is
+	# generated at startup from SSO_ENABLED/SSO_IDENTIFIER and is empty when SSO is off.
+	import /data/sso-redirect.conf
+
 	reverse_proxy vaultwarden:80 {
 		# Send the true remote IP to Rocket, so that vaultwarden can put this in the
 		# log, so that fail2ban can ban the correct IP.

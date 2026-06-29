@@ -150,6 +150,98 @@ terraform apply
 
 At that point the admin page is disabled again.
 
+## Optional: Enable Google Workspace SSO
+
+Vaultwarden supports SSO through OpenID Connect (OIDC). Google Workspace does **not**
+expose an OIDC endpoint for SSO — it only offers SAML, which Vaultwarden does not
+support. The supported path is to use Google's standard OAuth 2.0 / OIDC provider
+(`https://accounts.google.com`) with an OAuth client created in the Google Cloud
+Console. Restricting that OAuth client's consent screen to **Internal** limits sign-in
+to members of your Workspace organization, which gives you Workspace-gated SSO.
+
+This is the upstream Vaultwarden guidance; see the
+[Vaultwarden SSO wiki](https://github.com/dani-garcia/vaultwarden/wiki/Enabling-SSO-support-using-OpenId-Connect)
+and its Google Auth section for reference.
+
+### How SSO behaves here
+
+- A master password is still required after SSO; SSO controls *who* may authenticate,
+  not the vault encryption. This is expected Vaultwarden behavior.
+- The web vault has no automatic "Log in with SSO" button. When `SSO_ENABLED=true`,
+  the Caddy proxy redirects the bare site root to the SSO flow so users are not stuck
+  on the password screen. `/admin`, the API, and the OAuth callback are not redirected.
+- `SSO_IDENTIFIER` is cosmetic. Vaultwarden uses a single server-wide SSO config, so
+  any non-empty value works; it is not a per-organization identifier.
+
+### Important: the OAuth client is independent of this deployment
+
+The OAuth client and this Vaultwarden deployment do **not** need to be in the same
+Google Cloud project, and do not even need to be in the same organization. This repo
+manages only the Vaultwarden deployment; it intentionally does not create or manage
+the OAuth client with Terraform.
+
+### Workspace admin handoff: create the OAuth client
+
+Perform these steps in the [Google Cloud Console](https://console.cloud.google.com)
+for the organization whose Workspace users should be allowed to sign in. This can be
+a brand new, otherwise-empty project used only for the OAuth client.
+
+1. Create or select a project.
+2. Go to **APIs & Services → OAuth consent screen**.
+   - User type: **Internal** (restricts sign-in to your Workspace organization).
+     Use **External** only if you intentionally need accounts outside the org.
+   - App name, user support email, and developer contact email: fill in.
+   - Authorized domains: add the registrable domain of your Vaultwarden hostname
+     (for example `example.com` for `vw.example.com`).
+   - Save.
+3. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
+   - Application type: **Web application**.
+   - Authorized redirect URI:
+     `https://<your-vaultwarden-host>/identity/connect/oidc-signin`
+     (for example `https://vw.example.com/identity/connect/oidc-signin`).
+     This path is fixed by Vaultwarden and derived from `DOMAIN`.
+   - (Optional) Authorized JavaScript origin: `https://<your-vaultwarden-host>`.
+   - Create, then copy the **Client ID** and **Client secret**.
+
+Hand the Client ID and Client secret back to whoever runs the secrets helper. Treat
+the client secret like any other credential.
+
+### Enable SSO in the deployment
+
+Run the secrets helper and answer **yes** to the SSO prompt:
+
+```bash
+bash utilities/create-gcp-secrets.sh
+```
+
+When prompted it collects:
+
+1. SSO authority — keep the default `https://accounts.google.com` for Google.
+2. SSO client ID — from the OAuth client above.
+3. SSO client secret — from the OAuth client above.
+4. SSO identifier — cosmetic; press Enter to accept the default.
+5. SSO-only — answer **yes** to disable master-password-only login and require SSO,
+   or **no** to allow both.
+
+These map to the following env settings (also documented in `.env.template`):
+
+- `SSO_ENABLED=true`
+- `SSO_ONLY` — `true` to require SSO, `false` to also allow password login.
+- `SSO_AUTHORITY=https://accounts.google.com`
+- `SSO_AUTHORIZE_EXTRA_PARAMS="access_type=offline&prompt=consent"` — requests a
+  refresh token so sessions are not limited to one hour.
+- `SSO_AUTH_ONLY_NOT_SESSION=true` — use SSO for authentication while keeping
+  Vaultwarden's normal session handling.
+- `SSO_CLIENT_ID` / `SSO_CLIENT_SECRET` — from the OAuth client.
+- `SSO_IDENTIFIER` — cosmetic value used only in the login redirect.
+
+After applying Terraform (or redeploying), confirm `https://your-hostname` redirects
+into the Google sign-in flow and returns you to the master-password unlock.
+
+> First-time users with `SSO_ONLY=true`: because the root redirect points at the SSO
+> flow, invite users via the admin page so they can set a master password, or
+> temporarily set `SSO_ONLY=false` while onboarding.
+
 ## Backups and restore
 
 Backups are configured for GCS by default.

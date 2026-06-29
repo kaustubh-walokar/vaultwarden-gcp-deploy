@@ -1,6 +1,27 @@
 #!/bin/sh
 set -eu
 
+write_sso_redirect_snippet() {
+  # When SSO is enabled, redirect only the bare root into the SSO flow; otherwise
+  # leave the snippet empty so the site behaves like a normal password login.
+  snippet="/data/sso-redirect.conf"
+  identifier="${SSO_IDENTIFIER:-sso}"
+
+  case "$(printf '%s' "${SSO_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes)
+      cat > "$snippet" <<EOF
+@root path /
+redir @root /#/sso?identifier=${identifier}
+EOF
+      echo "proxy-start: SSO redirect enabled (identifier=${identifier})" >&2
+      ;;
+    *)
+      : > "$snippet"
+      echo "proxy-start: SSO redirect disabled" >&2
+      ;;
+  esac
+}
+
 wait_for_dns() {
   domain="${DOMAIN:-}"
   timeout="${PROXY_DNS_WAIT_TIMEOUT:-300}"
@@ -47,4 +68,5 @@ wait_for_dns() {
 }
 
 wait_for_dns
+write_sso_redirect_snippet
 exec "$@"
