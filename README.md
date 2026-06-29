@@ -14,8 +14,29 @@ You will need:
 
 1. A GCP project with billing enabled.
 2. Cloud Shell access in that project.
-3. A domain managed in Cloudflare DNS.
+3. A domain you control, using one of the two DNS routing paths below.
 4. A mailbox you can use for Vaultwarden SMTP.
+
+## DNS routing
+
+Caddy provisions HTTPS for your Vaultwarden hostname (for example `vw.example.com`),
+so that hostname must resolve to the VM's public IP. The VM uses an ephemeral IP by
+default, so a DDNS updater (`ddclient`) keeps DNS pointed at it. Choose the path that
+matches where your domain is managed:
+
+- **Cloudflare** — your domain is managed in Cloudflare DNS. `ddclient` updates the
+  `vw.example.com` record directly. Use Cloudflare in DNS-only mode for that hostname;
+  do not enable the Cloudflare proxy. You need a Cloudflare API token scoped to the
+  zone with `Zone:DNS:Edit` and `Zone:Zone:Read`.
+- **DuckDNS + CNAME** — your domain is on a host without DDNS support (for example
+  Wix). `ddclient` updates a free DuckDNS record instead, and you add a CNAME at your
+  domain host so `vw.example.com` follows it. One-time manual setup:
+    1. Register a DuckDNS subdomain at [duckdns.org](https://www.duckdns.org), for
+       example `vw-example-com` (becomes `vw-example-com.duckdns.org`), and copy your
+       DuckDNS token.
+    2. Run the secrets helper and choose the DuckDNS path with that subdomain and token.
+    3. At your domain host, add a CNAME record: `vw.example.com` ->
+       `vw-example-com.duckdns.org`.
 
 ## Why this is secure
 
@@ -55,13 +76,14 @@ This helper does the first-run setup work for you:
 Have these values ready when prompted:
 
 1. Your Vaultwarden hostname, for example `vw.example.com`.
-2. Your Cloudflare zone, for example `example.com`.
-3. Your Cloudflare API token.
-4. Your Let's Encrypt e-mail address.
-5. Your timezone.
-6. Your SMTP sender address and password.
+2. Your DNS routing choice (see [DNS routing](#dns-routing) above):
+   - Cloudflare: your Cloudflare zone (for example `example.com`) and API token.
+   - DuckDNS: your DuckDNS subdomain (for example `vw-example-com`) and token.
+3. Your Let's Encrypt e-mail address.
+4. Your timezone.
+5. Your SMTP sender address and password.
 
-Use Cloudflare in DNS-only mode for the Vaultwarden hostname. Do not enable the Cloudflare proxy.
+If you chose DuckDNS, add the CNAME at your domain host after running the helper.
 
 The script prints a bootstrap `ADMIN_TOKEN`. Save it before you continue.
 
@@ -124,9 +146,8 @@ Open `https://your-hostname`.
 
 The deployment is ready when:
 
-1. The hostname exists in Cloudflare DNS.
-2. The hostname resolves to the VM external IP.
-3. The site loads over HTTPS without a certificate warning.
+1. The hostname resolves to the VM external IP (directly via Cloudflare, or through the DuckDNS CNAME).
+2. The site loads over HTTPS without a certificate warning.
 
 If it is not ready yet, check the VM logs in Google Cloud Console under Compute Engine -> VM instances -> your instance -> Logs.
 

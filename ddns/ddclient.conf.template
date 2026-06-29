@@ -1,7 +1,11 @@
-# ddclient.conf template (Cloudflare)
+# ddclient.conf template
 # Managed GCP deploys generate this file from Secret Manager during first boot.
 # Place this file as ddns/ddclient.conf only for manual or legacy installs.
 # Note: usev4/usev6 avoids older ddclient "use" update issues for some providers.
+#
+# Pick ONE protocol block below: Cloudflare (domain managed in Cloudflare) or
+# DuckDNS (domain on a host without DDNS, fronted by a CNAME). See the README
+# "DNS routing" section for which one applies to you.
 
 # IPv4 (recommended)
 usev4=webv4, webv4=ipify-ipv4
@@ -9,22 +13,28 @@ usev4=webv4, webv4=ipify-ipv4
 # Optional IPv6
 #usev6=webv6, webv6=ipify-ipv6
 
-protocol=cloudflare
-server=api.cloudflare.com/client/v4
-zone=example.com
-
-# TTL: 1 == "Auto" in Cloudflare
-ttl=1
-
 # --- Optional: use GCP metadata for public IP discovery instead of web ---
 #usev4=cmd
 #cmd='curl -sS -H "Metadata-Flavor: Google" http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip'
 
-# API token (recommended)
-# Token must have: Zone:DNS:Edit and Zone:Zone:Read
-# Scope: include the target zone.
-# ddclient is expected to maintain the hostname record below.
-# If first boot fails to establish the record, create a DNS-only A record once and let ddclient update it afterward.
+# === Option A: Cloudflare ===================================================
+# Token must have Zone:DNS:Edit and Zone:Zone:Read, scoped to the target zone.
+# ddclient maintains the hostname record below. If first boot fails to create
+# it, add a DNS-only A record once and let ddclient update it afterward.
+protocol=cloudflare
+server=api.cloudflare.com/client/v4
+zone=example.com
+# TTL: 1 == "Auto" in Cloudflare
+ttl=1
 login=token
 password=YOUR_CLOUDFLARE_API_TOKEN
 vw.example.com
+
+# === Option B: DuckDNS ======================================================
+# ddclient updates <subdomain>.duckdns.org. At your domain host, add a CNAME so
+# vw.example.com points to <subdomain>.duckdns.org. The host line is the bare
+# DuckDNS label only (no .duckdns.org suffix).
+#protocol=duckdns
+#server=www.duckdns.org
+#password=YOUR_DUCKDNS_TOKEN
+#vw-example-com
