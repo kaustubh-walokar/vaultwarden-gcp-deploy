@@ -116,3 +116,31 @@ variable "reboot_time" {
   type        = string
   default     = "06:00"
 }
+
+variable "enable_disk_snapshots" {
+  # Scheduled boot-disk snapshots for whole-VM disaster recovery.
+  description = "Enable scheduled Compute Engine snapshots of the boot disk"
+  type        = bool
+  default     = true
+}
+
+variable "snapshot_start_time" {
+  # UTC start time for the daily snapshot, on the hour (HH:MM).
+  description = "UTC start time for the daily snapshot schedule (HH:MM)"
+  type        = string
+  default     = "06:00"
+}
+
+variable "snapshot_retention_days" {
+  # Snapshots older than this are auto-deleted.
+  description = "Number of days to retain scheduled snapshots"
+  type        = number
+  default     = 30
+}
+
+variable "snapshot_storage_location" {
+  # Leave empty to store snapshots in the deployment region (single-region).
+  description = "Optional override for snapshot storage location (region or multi-region)"
+  type        = string
+  default     = ""
+}

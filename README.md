@@ -265,9 +265,14 @@ into the Google sign-in flow and returns you to the master-password unlock.
 
 ## Backups and restore
 
-Backups are configured for GCS by default.
+This deployment keeps two independent layers of protection, because they cover different failure modes:
 
-To restore from a backup:
+- **GCS logical backups (rclone):** a small, application-consistent tarball of the Vaultwarden data, synced to the managed bucket on a schedule. Portable and granular — easy to pull off-platform and to restore a single point in time.
+- **Boot-disk snapshots:** scheduled, whole-disk snapshots of the VM for fast disaster recovery. They capture the entire machine state (OS, Docker, certs, data), so you can rebuild the VM as it was rather than re-running first-boot setup. Snapshots are crash-consistent (no guest flush on Container-Optimized OS) and stay within GCP.
+
+Snapshots are enabled by default: daily, single-region, retained for 30 days, with old snapshots auto-deleted by the retention policy. Tweak via `enable_disk_snapshots`, `snapshot_start_time`, `snapshot_retention_days`, and `snapshot_storage_location` in `infra/terraform.tfvars`.
+
+### Restore from a GCS backup
 
 1. Find the object path you want to restore from the managed backup bucket.
 2. Set `restore_backup_path` in `infra/terraform.tfvars`.
@@ -276,6 +281,49 @@ To restore from a backup:
 5. Clear `restore_backup_path` back to `""` and apply again.
 
 Restores are boot-time operations. This repo does not assume routine SSH access or manual in-place recovery steps.
+
+### Restore from a snapshot (disaster recovery)
+
+Use this when the VM or its disk is lost or unrecoverable and you want to bring the whole machine back to a known-good state. This is a full rebuild from a snapshot, not a single-file recovery.
+
+1. Find the snapshot to restore in the Google Cloud console under **Compute Engine → Snapshots**, or with `gcloud compute snapshots list`. Snapshots are named after the schedule (for example `vaultwarden-snapshot-schedule-<timestamp>`). Note the snapshot name.
+2. Create a disk from the snapshot, in the same zone as your deployment:
+
+    ```sh
+    gcloud compute disks create vaultwarden-restore \
+      --source-snapshot=<SNAPSHOT_NAME> \
+      --zone=<ZONE>
+    ```
+
+3. Take the existing instance out of the way. Because Terraform manages the instance and its inline boot disk, the cleanest path is to delete the broken instance so Terraform can be pointed at the restored disk:
+
+    ```sh
+    gcloud compute instances delete <INSTANCE_NAME> --zone=<ZONE>
+    ```
+
+4. Recreate the instance using the restored disk as its boot disk:
+
+    ```sh
+    gcloud compute instances create <INSTANCE_NAME> \
+      --zone=<ZONE> \
+      --machine-type=<MACHINE_TYPE> \
+      --disk=name=vaultwarden-restore,boot=yes,auto-delete=yes \
+      --service-account=<SERVICE_ACCOUNT_EMAIL> \
+      --scopes=cloud-platform \
+      --tags=http-server,https-server,<INSTANCE_NAME>
+    ```
+
+   The machine type, service account email, and instance name match your `infra/terraform.tfvars` and the `service_account_email` output. The restored disk already contains the configured stack, so no first-boot setup is needed.
+5. Reconcile Terraform state so it manages the rebuilt instance instead of trying to recreate it. Import the instance back into state:
+
+    ```sh
+    cd infra
+    terraform import google_compute_instance.vaultwarden projects/<PROJECT_ID>/zones/<ZONE>/instances/<INSTANCE_NAME>
+    terraform plan
+    ```
+
+   Resolve any drift shown by the plan, then `terraform apply` to converge. The snapshot schedule re-attaches to the new boot disk on the next apply.
+6. Confirm DNS still points at the instance IP. If you use an ephemeral IP, update your DNS record (or rely on ddclient) to the new address.
 
 ## Day-two operations
 

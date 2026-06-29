@@ -1,5 +1,7 @@
 locals {
   backup_bucket_name = var.backup_bucket_name != "" ? var.backup_bucket_name : "${var.project_id}-${var.instance_name}-backups"
+  # Default snapshots to the deployment region (single-region) unless overridden.
+  snapshot_storage_location = var.snapshot_storage_location != "" ? var.snapshot_storage_location : var.region
   required_services = toset([
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
@@ -188,4 +190,43 @@ resource "google_compute_instance" "vaultwarden" {
     reboot_timezone       = var.reboot_timezone
     reboot_time           = var.reboot_time
   })
+}
+
+resource "google_compute_resource_policy" "snapshot" {
+  # Scheduled, whole-disk snapshots for fast disaster recovery. This complements
+  # the logical GCS backups: the rclone tarball is portable and granular, while
+  # snapshots capture the entire VM state for a quick rebuild.
+  count      = var.enable_disk_snapshots ? 1 : 0
+  name       = "${var.instance_name}-snapshot-schedule"
+  region     = var.region
+  depends_on = [google_project_service.required]
+
+  snapshot_schedule_policy {
+    schedule {
+      daily_schedule {
+        days_in_cycle = 1
+        start_time    = var.snapshot_start_time
+      }
+    }
+
+    retention_policy {
+      # Auto-delete snapshots older than the retention window.
+      max_retention_days    = var.snapshot_retention_days
+      on_source_disk_delete = "APPLY_RETENTION_POLICY"
+    }
+
+    snapshot_properties {
+      # Single-region storage by default; crash-consistent (no guest flush on COS).
+      storage_locations = [local.snapshot_storage_location]
+      guest_flush       = false
+    }
+  }
+}
+
+resource "google_compute_disk_resource_policy_attachment" "snapshot" {
+  # Attach the schedule to the instance boot disk (named after the instance).
+  count = var.enable_disk_snapshots ? 1 : 0
+  name  = google_compute_resource_policy.snapshot[0].name
+  disk  = google_compute_instance.vaultwarden.name
+  zone  = var.zone
 }

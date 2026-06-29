@@ -12,3 +12,8 @@ output "service_account_email" {
   # Useful for auditing IAM bindings.
   value = google_service_account.vaultwarden.email
 }
+
+output "snapshot_schedule_name" {
+  # Name of the snapshot schedule policy, when enabled.
+  value = var.enable_disk_snapshots ? google_compute_resource_policy.snapshot[0].name : null
+}
