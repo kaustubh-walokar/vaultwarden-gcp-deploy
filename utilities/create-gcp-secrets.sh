@@ -34,10 +34,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -n "$CONFIG_FILE" ]; then
-  parse_config_file "$CONFIG_FILE"
-fi
-
 require_command() {
   local command_name="$1"
 
@@ -102,6 +98,10 @@ parse_config_file() {
     esac
   done < "$config_file"
 }
+
+if [ -n "$CONFIG_FILE" ]; then
+  parse_config_file "$CONFIG_FILE"
+fi
 
 str_replace_all() {
   # Literal find/replace using prefix/suffix removal only. Unlike sed or bash
