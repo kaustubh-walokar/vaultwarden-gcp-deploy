@@ -153,9 +153,9 @@ prompt_value() {
   local var_name="${3:-}"
   local response
 
+  # If config file provided value, use it as default (shown in prompt)
   if [ -n "$var_name" ] && [ -n "${!var_name:-}" ]; then
-    printf '%s\n' "${!var_name}"
-    return
+    default_value="${!var_name}"
   fi
 
   if [ -n "$default_value" ]; then
@@ -174,14 +174,24 @@ prompt_secret() {
   local prompt_text="$1"
   local var_name="${2:-}"
   local response
+  local default_value=""
 
+  # If config file provided value, use it as default (but don't show it)
   if [ -n "$var_name" ] && [ -n "${!var_name:-}" ]; then
-    printf '%s' "${!var_name}"
-    return
+    default_value="${!var_name}"
   fi
 
-  read -r -s -p "$prompt_text: " response
-  printf '\n' >&2
+  if [ -n "$default_value" ]; then
+    read -r -s -p "$prompt_text [***]: " response
+    printf '\n' >&2
+    if [ -z "$response" ]; then
+      response="$default_value"
+    fi
+  else
+    read -r -s -p "$prompt_text: " response
+    printf '\n' >&2
+  fi
+
   printf '%s' "$response"
 }
 
@@ -743,17 +753,6 @@ if [ "$sso_enabled" = 'true' ] || prompt_yes_no 'Enable SSO?' 'N'; then
   sso_enabled='true'
   sso_authority="$(prompt_value 'SSO authority (OpenID Connect issuer URL)' "$sso_authority" 'SSO_AUTHORITY')"
   sso_client_id="$(prompt_value 'SSO client ID' "$sso_client_id" 'SSO_CLIENT_ID')"
-  require_non_empty 'SSO client ID' "$sso_client_id"
-  sso_client_secret="$(prompt_secret 'SSO client secret' 'SSO_CLIENT_SECRET')"
-  require_non_empty 'SSO client secret' "$sso_client_secret"
-  sso_identifier="$(prompt_value 'SSO identifier (cosmetic, used in the login redirect)' "$sso_identifier" 'SSO_IDENTIFIER')"
-  if prompt_yes_no 'Disable master-password login and require SSO only?' 'Y'; then
-    sso_only='true'
-  fi
-fi
-if [ "$sso_enabled" = 'true' ]; then
-  sso_authority="$(prompt_value 'SSO authority (OpenID Connect issuer URL)' "$sso_authority" 'SSO_AUTHORITY')"
-  sso_client_id="$(prompt_value 'SSO client ID' '' 'SSO_CLIENT_ID')"
   require_non_empty 'SSO client ID' "$sso_client_id"
   sso_client_secret="$(prompt_secret 'SSO client secret' 'SSO_CLIENT_SECRET')"
   require_non_empty 'SSO client secret' "$sso_client_secret"
