@@ -19,6 +19,24 @@ SCRIPT_MODE="${1:-create}"
 TFSTATE_BUCKET_NAME="${TFSTATE_BUCKET_NAME:-}"
 TFSTATE_BUCKET_LOCATION="${TFSTATE_BUCKET_LOCATION:-us-central1}"
 TFSTATE_PREFIX="${TFSTATE_PREFIX:-vaultwarden}"
+CONFIG_FILE="${CONFIG_FILE:-}"
+
+# Parse --config-file argument
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config-file|-f)
+      CONFIG_FILE="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$CONFIG_FILE" ]; then
+  parse_config_file "$CONFIG_FILE"
+fi
 
 require_command() {
   local command_name="$1"
@@ -36,6 +54,53 @@ require_file() {
     printf 'Error: required file not found: %s\n' "$file_path" >&2
     exit 1
   fi
+}
+
+parse_config_file() {
+  local config_file="$1"
+
+  if [ ! -f "$config_file" ]; then
+    printf 'Error: config file not found: %s\n' "$config_file" >&2
+    exit 1
+  fi
+
+  while IFS='=' read -r key value; do
+    key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$key" in
+      \#*) continue ;;
+      '') continue ;;
+      project_id) PROJECT_ID="$value" ;;
+      hostname) HOSTNAME="$value" ;;
+      dns_provider) DNS_PROVIDER="$value" ;;
+      zone) ZONE="$value" ;;
+      duckdns_subdomain) DUCKDNS_SUBDOMAIN="$value" ;;
+      acme_email) ACME_EMAIL="$value" ;;
+      timezone) TIMEZONE="$value" ;;
+      signup_domains_whitelist) SIGNUP_DOMAINS_WHITELIST="$value" ;;
+      cloudflare_token) CLOUDFLARE_TOKEN="$value" ;;
+      duckdns_token) DUCKDNS_TOKEN="$value" ;;
+      backup_bucket_name) BACKUP_BUCKET_NAME="$value" ;;
+      backup_path) BACKUP_PATH="$value" ;;
+      smtp_host) SMTP_HOST="$value" ;;
+      smtp_port) SMTP_PORT="$value" ;;
+      smtp_security) SMTP_SECURITY="$value" ;;
+      smtp_from) SMTP_FROM="$value" ;;
+      smtp_password) SMTP_PASSWORD="$value" ;;
+      sso_enabled) SSO_ENABLED="$value" ;;
+      sso_only) SSO_ONLY="$value" ;;
+      sso_authority) SSO_AUTHORITY="$value" ;;
+      sso_client_id) SSO_CLIENT_ID="$value" ;;
+      sso_client_secret) SSO_CLIENT_SECRET="$value" ;;
+      sso_identifier) SSO_IDENTIFIER="$value" ;;
+      env_secret_name) ENV_SECRET_NAME="$value" ;;
+      ddclient_secret_name) DDCLIENT_SECRET_NAME="$value" ;;
+      tfstate_bucket_name) TFSTATE_BUCKET_NAME="$value" ;;
+      tfstate_bucket_location) TFSTATE_BUCKET_LOCATION="$value" ;;
+      tfstate_prefix) TFSTATE_PREFIX="$value" ;;
+      *) printf 'Warning: unknown config key: %s\n' "$key" >&2 ;;
+    esac
+  done < "$config_file"
 }
 
 str_replace_all() {
@@ -85,7 +150,13 @@ render_ddclient_template() {
 prompt_value() {
   local prompt_text="$1"
   local default_value="${2:-}"
+  local var_name="${3:-}"
   local response
+
+  if [ -n "$var_name" ] && [ -n "${!var_name:-}" ]; then
+    printf '%s\n' "${!var_name}"
+    return
+  fi
 
   if [ -n "$default_value" ]; then
     read -r -p "$prompt_text [$default_value]: " response
@@ -101,7 +172,13 @@ prompt_value() {
 
 prompt_secret() {
   local prompt_text="$1"
+  local var_name="${2:-}"
   local response
+
+  if [ -n "$var_name" ] && [ -n "${!var_name:-}" ]; then
+    printf '%s' "${!var_name}"
+    return
+  fi
 
   read -r -s -p "$prompt_text: " response
   printf '\n' >&2
@@ -483,11 +560,22 @@ case "$SCRIPT_MODE" in
     ;;
   --clear-admin-token)
     ;;
+  --config-file=*)
+    CONFIG_FILE="${SCRIPT_MODE#*=}"
+    ;;
   *)
-    printf 'Usage: %s [--prepare-terraform|--clear-admin-token]\n' "${0##*/}" >&2
-    exit 1
+    if [[ "$SCRIPT_MODE" == --config-file=* ]]; then
+      CONFIG_FILE="${SCRIPT_MODE#*=}"
+    else
+      printf 'Usage: %s [--prepare-terraform|--clear-admin-token|--config-file=FILE]\n' "${0##*/}" >&2
+      exit 1
+    fi
     ;;
 esac
+
+if [ -n "$CONFIG_FILE" ]; then
+  parse_config_file "$CONFIG_FILE"
+fi
 
 require_command gcloud
 require_file "$ENV_TEMPLATE_FILE"
@@ -531,10 +619,10 @@ printf 'Terraform variables file: %s\n\n' "$TFVARS_FILE"
 
 ensure_project_services_enabled
 
-env_secret_name="$(prompt_value 'Env secret name' "$ENV_SECRET_NAME")"
-ddclient_secret_name="$(prompt_value 'ddclient secret name' "$DDCLIENT_SECRET_NAME")"
+env_secret_name="$(prompt_value 'Env secret name' "$ENV_SECRET_NAME" 'ENV_SECRET_NAME')"
+ddclient_secret_name="$(prompt_value 'ddclient secret name' "$DDCLIENT_SECRET_NAME" 'DDCLIENT_SECRET_NAME')"
 
-hostname="$(prompt_value 'Vaultwarden hostname (for example vw.example.com)')"
+hostname="$(prompt_value 'Vaultwarden hostname (for example vw.example.com)' '' 'HOSTNAME')"
 require_non_empty 'Vaultwarden hostname' "$hostname"
 validate_hostname "$hostname"
 
@@ -542,7 +630,7 @@ validate_hostname "$hostname"
 printf '\nDNS routing: 1) Cloudflare DDNS  2) DuckDNS + CNAME\n'
 dns_provider=''
 while [ -z "$dns_provider" ]; do
-  case "$(prompt_value 'Choose 1 or 2' '1')" in
+  case "$(prompt_value 'Choose 1 or 2' '1' 'DNS_PROVIDER')" in
     1|cloudflare)
       dns_provider='cloudflare'
       ;;
@@ -560,30 +648,30 @@ duckdns_subdomain=''
 signup_domains_fallback=''
 
 if [ "$dns_provider" = 'cloudflare' ]; then
-  zone="$(prompt_value 'Cloudflare zone (for example example.com)')"
+  zone="$(prompt_value 'Cloudflare zone (for example example.com)' '' 'ZONE')"
   require_non_empty 'Cloudflare zone' "$zone"
   validate_zone "$zone"
   ensure_hostname_matches_zone "$hostname" "$zone"
   signup_domains_fallback="$zone"
 else
-  duckdns_subdomain="$(prompt_value 'DuckDNS subdomain (the label before .duckdns.org)')"
+  duckdns_subdomain="$(prompt_value 'DuckDNS subdomain (the label before .duckdns.org)' '' 'DUCKDNS_SUBDOMAIN')"
   require_non_empty 'DuckDNS subdomain' "$duckdns_subdomain"
   duckdns_subdomain="$(normalize_duckdns_subdomain "$duckdns_subdomain")"
   validate_duckdns_subdomain "$duckdns_subdomain"
   signup_domains_fallback="$(derive_parent_domain "$hostname")"
 fi
 
-acme_email="$(prompt_value "Let's Encrypt email address")"
+acme_email="$(prompt_value "Let's Encrypt email address" '' 'ACME_EMAIL')"
 require_non_empty "Let's Encrypt email address" "$acme_email"
 
 timezone_default="$(template_env_setting 'TZ')"
 timezone_default="${timezone_default:-Etc/UTC}"
-timezone="$(prompt_value 'Timezone (TZ database name, for example Etc/UTC, America/New_York, America/Chicago, America/Denver, America/Los_Angeles)' "$timezone_default")"
+timezone="$(prompt_value 'Timezone (TZ database name, for example Etc/UTC, America/New_York, America/Chicago, America/Denver, America/Los_Angeles)' "$timezone_default" 'TIMEZONE')"
 require_non_empty 'Timezone' "$timezone"
 
 signup_domains_default="$(template_env_setting 'SIGNUPS_DOMAINS_WHITELIST')"
 signup_domains_default="${signup_domains_default:-$signup_domains_fallback}"
-signup_domains_whitelist="$(prompt_value 'Allowed signup e-mail domains (comma or space separated)' "$signup_domains_default")"
+signup_domains_whitelist="$(prompt_value 'Allowed signup e-mail domains (comma or space separated)' "$signup_domains_default" 'SIGNUP_DOMAINS_WHITELIST')"
 signup_domains_whitelist="$(normalize_domain_whitelist "$signup_domains_whitelist")"
 require_non_empty 'Allowed signup e-mail domains' "$signup_domains_whitelist"
 
@@ -592,11 +680,11 @@ bootstrap_admin_token="$(generate_admin_token)"
 cloudflare_token=''
 duckdns_token=''
 if [ "$dns_provider" = 'cloudflare' ]; then
-  cloudflare_token="$(prompt_secret 'Cloudflare API token')"
+  cloudflare_token="$(prompt_secret 'Cloudflare API token' 'CLOUDFLARE_TOKEN')"
   require_non_empty 'Cloudflare API token' "$cloudflare_token"
   validate_cloudflare_token "$cloudflare_token"
 else
-  duckdns_token="$(prompt_secret 'DuckDNS token')"
+  duckdns_token="$(prompt_secret 'DuckDNS token' 'DUCKDNS_TOKEN')"
   require_non_empty 'DuckDNS token' "$duckdns_token"
   validate_duckdns_token "$duckdns_token"
 fi
@@ -605,10 +693,10 @@ backup_bucket_name=''
 backup_path='vaultwarden'
 backup_rclone_dest=''
 
-backup_bucket_name="$(prompt_value 'Backup bucket name' "${project_id}-vaultwarden-backups")"
+backup_bucket_name="$(prompt_value 'Backup bucket name' "${project_id}-vaultwarden-backups" 'BACKUP_BUCKET_NAME')"
 require_non_empty 'Backup bucket name' "$backup_bucket_name"
 
-backup_path="$(prompt_value 'Backup path inside the bucket' 'vaultwarden')"
+backup_path="$(prompt_value 'Backup path inside the bucket' 'vaultwarden' 'BACKUP_PATH')"
 backup_path="$(normalize_backup_path "$backup_path")"
 
 backup_rclone_dest="${backup_bucket_name}"
@@ -620,9 +708,9 @@ fi
 # App passwords require 2-Step Verification: https://myaccount.google.com/apppasswords
 smtp_from=""
 smtp_password=""
-smtp_host="$(template_env_setting 'SMTP_HOST')"
-smtp_port="$(template_env_setting 'SMTP_PORT')"
-smtp_security="$(template_env_setting 'SMTP_SECURITY')"
+smtp_host="${SMTP_HOST:-$(template_env_setting 'SMTP_HOST')}"
+smtp_port="${SMTP_PORT:-$(template_env_setting 'SMTP_PORT')}"
+smtp_security="${SMTP_SECURITY:-$(template_env_setting 'SMTP_SECURITY')}"
 
 smtp_host="${smtp_host:-smtp.gmail.com}"
 smtp_port="${smtp_port:-587}"
@@ -633,33 +721,46 @@ printf 'For Google Workspace: generate an app password at https://myaccount.goog
 printf '(2-Step Verification must be enabled on the sending account.)\n\n'
 
 smtp_from_default="$(template_env_setting 'SMTP_FROM')"
-smtp_from="$(prompt_value 'SMTP from address and username (your Google Workspace email)' "$smtp_from_default")"
+smtp_from="$(prompt_value 'SMTP from address and username (your Google Workspace email)' "$smtp_from_default" 'SMTP_FROM')"
 require_non_empty 'SMTP from address' "$smtp_from"
-smtp_password="$(prompt_secret 'SMTP app password')"
+smtp_password="$(prompt_secret 'SMTP app password' 'SMTP_PASSWORD')"
 require_non_empty 'SMTP app password' "$smtp_password"
 
 # SSO / OpenID Connect (optional)
-sso_enabled='false'
-sso_only='false'
-sso_client_id=''
-sso_client_secret=''
+sso_enabled="${SSO_ENABLED:-false}"
+sso_only="${SSO_ONLY:-false}"
+sso_client_id="${SSO_CLIENT_ID:-}"
+sso_client_secret="${SSO_CLIENT_SECRET:-}"
 sso_identifier="$(template_env_setting 'SSO_IDENTIFIER')"
 sso_identifier="${sso_identifier:-sso}"
 sso_authority_default="$(template_env_setting 'SSO_AUTHORITY')"
-sso_authority="${sso_authority_default:-https://accounts.google.com}"
+sso_authority="${SSO_AUTHORITY:-${sso_authority_default:-https://accounts.google.com}}"
 
 printf '\nSingle Sign-On (SSO) is optional. When enabled, the proxy sends users straight\n'
 printf 'into the SSO flow and a master password is still required. Leave disabled for\n'
 printf 'normal password login.\n\n'
-if prompt_yes_no 'Enable SSO?' 'N'; then
+if [ "$sso_enabled" = 'true' ] || prompt_yes_no 'Enable SSO?' 'N'; then
   sso_enabled='true'
-  sso_authority="$(prompt_value 'SSO authority (OpenID Connect issuer URL)' "$sso_authority")"
-  sso_client_id="$(prompt_value 'SSO client ID')"
+  sso_authority="$(prompt_value 'SSO authority (OpenID Connect issuer URL)' "$sso_authority" 'SSO_AUTHORITY')"
+  sso_client_id="$(prompt_value 'SSO client ID' "$sso_client_id" 'SSO_CLIENT_ID')"
   require_non_empty 'SSO client ID' "$sso_client_id"
-  sso_client_secret="$(prompt_secret 'SSO client secret')"
+  sso_client_secret="$(prompt_secret 'SSO client secret' 'SSO_CLIENT_SECRET')"
   require_non_empty 'SSO client secret' "$sso_client_secret"
-  sso_identifier="$(prompt_value 'SSO identifier (cosmetic, used in the login redirect)' "$sso_identifier")"
+  sso_identifier="$(prompt_value 'SSO identifier (cosmetic, used in the login redirect)' "$sso_identifier" 'SSO_IDENTIFIER')"
   if prompt_yes_no 'Disable master-password login and require SSO only?' 'Y'; then
+    sso_only='true'
+  fi
+fi
+if [ "$sso_enabled" = 'true' ]; then
+  sso_authority="$(prompt_value 'SSO authority (OpenID Connect issuer URL)' "$sso_authority" 'SSO_AUTHORITY')"
+  sso_client_id="$(prompt_value 'SSO client ID' '' 'SSO_CLIENT_ID')"
+  require_non_empty 'SSO client ID' "$sso_client_id"
+  sso_client_secret="$(prompt_secret 'SSO client secret' 'SSO_CLIENT_SECRET')"
+  require_non_empty 'SSO client secret' "$sso_client_secret"
+  sso_identifier="$(prompt_value 'SSO identifier (cosmetic, used in the login redirect)' "$sso_identifier" 'SSO_IDENTIFIER')"
+  if [ -n "${SSO_ONLY:-}" ]; then
+    sso_only="${SSO_ONLY}"
+  elif prompt_yes_no 'Disable master-password login and require SSO only?' 'Y'; then
     sso_only='true'
   fi
 fi
